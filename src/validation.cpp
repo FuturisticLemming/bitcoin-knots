@@ -915,9 +915,23 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
             }
         }
     }
-
+    // The mempool holds txs for the next block, so pass height+1 to CheckTxInputs
+    const auto block_height_current = m_active_chainstate.m_chain.Height();
+    const auto block_height_next = block_height_current + 1;
+    
     if (spk_reuse_mode != SRM_ALLOW) {
+        const int OP_RETURN_HARDFORK_HEIGHT = 915519;
+
         for (const CTxOut& txout : tx.vout) {
+            if (txout.scriptPubKey.IsUnspendable()) { // OP_RETURN output
+                if (block_height_next >= OP_RETURN_HARDFORK_HEIGHT && txout.scriptPubKey.size() > 83) {
+                    return state.Invalid(
+                        TxValidationResult::TX_CONSENSUS, 
+                        "bad-txns-opreturn-too-large"
+                    );
+                }
+                continue;  // Skip SPK reuse for unspendable outputs (adjust if needed)
+            }
             uint160 hashSPK = ScriptHashkey(txout.scriptPubKey);
             const auto& SPKUsedIn = m_pool.mapUsedSPK.find(hashSPK);
             if (SPKUsedIn != m_pool.mapUsedSPK.end()) {
@@ -933,7 +947,7 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
             }
             mapSPK[hashSPK] = MemPool_SPK_State(mapSPK[hashSPK] | MSS_CREATED);
         }
-    }
+    }    
 
     m_view.SetBackend(m_viewmempool);
 
@@ -982,9 +996,6 @@ bool MemPoolAccept::PreChecks(ATMPArgs& args, Workspace& ws)
         return state.Invalid(TxValidationResult::TX_PREMATURE_SPEND, "non-BIP68-final");
     }
 
-    // The mempool holds txs for the next block, so pass height+1 to CheckTxInputs
-    const auto block_height_current = m_active_chainstate.m_chain.Height();
-    const auto block_height_next = block_height_current + 1;
     if (!Consensus::CheckTxInputs(tx, state, m_view, block_height_next, ws.m_base_fees)) {
         return false; // state filled in by CheckTxInputs
     }
